@@ -1,0 +1,44 @@
+name: Deploy Backend PHP al VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Configurar llave SSH
+        uses: webfactory/ssh-agent@v0.5.4
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Enviar archivos al VPS e iniciar servidor
+        env:
+          SSH_HOST: ${{ secrets.SERVER_IP }}
+          SSH_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          set -Eeuo pipefail
+
+          # 1. Asegurar que la carpeta del backend exista en tu espacio del VPS
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SSH_HOST "mkdir -p /var/www/seminario1/sgp_backend"
+
+          # 2. Sincronizar los archivos PHP excluyendo cosas de Git
+          rsync -avz -e "ssh -o StrictHostKeyChecking=no" --exclude '.git*' ./ $SSH_USER@$SSH_HOST:/var/www/seminario1/sgp_backend/
+
+          # 3. Levantar o reiniciar el proceso de PHP en el puerto 8083
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SSH_HOST "bash -s" << 'EOF'
+            set -Eeuo pipefail
+            
+            # Si el puerto 8083 ya está ocupado por una versión vieja de tu backend, la apaga
+            fuser -k 8083/tcp || true
+            
+            # Enciende el servidor de PHP en segundo plano apuntando a tu puerto asignado
+            nohup php -S localhost:8083 -t /var/www/seminario1/sgp_backend/ > /dev/null 2>&1 &
+          EOF
