@@ -1,5 +1,6 @@
-# Inventario AI - Backend API 📦⚓
 JOSE ALBERTO RODRIGUEZ PANAMEÑO 
+----
+# Inventario AI - Backend API 📦⚓
 
 Este repositorio contiene la API RESTful para el sistema de gestión logística, control de patios e inventario de contenedores. Está desarrollado en PHP nativo utilizando arquitectura limpia, consultas preparadas con PDO y conectividad optimizada para bases de datos MySQL en entornos de servidores privados (VPS).
 
