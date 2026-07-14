@@ -2,7 +2,7 @@
 
 // ✅ CORS — debe ser lo primero, antes de require y de cualquier lógica
 // Cambiar el asterisco por tu dominio real si quieres restringir el acceso solo a tu frontend:
-header("Access-Control-Allow-Origin: https://sgp.seminario1.eleueleo.com");
+header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: GET, PUT, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type");
 header("Content-Type: application/json");
