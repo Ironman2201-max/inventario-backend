@@ -26,19 +26,19 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          # 1. Asegurar que la carpeta del backend exista en tu espacio del VPS
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SSH_HOST "mkdir -p /var/www/seminario1/sgp_backend"
+          # 1. Crear la carpeta para tu API PHP en el VPS si no existe
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SSH_HOST "mkdir -p /var/www/sgp_backend"
 
-          # 2. Sincronizar los archivos PHP excluyendo cosas de Git
-          rsync -avz -e "ssh -o StrictHostKeyChecking=no" --exclude '.git*' ./ $SSH_USER@$SSH_HOST:/var/www/seminario1/sgp_backend/
+          # 2. Sincronizar tus archivos PHP locales directo a esa carpeta
+          rsync -avz -e "ssh -o StrictHostKeyChecking=no" --exclude '.git*' ./ $SSH_USER@$SSH_HOST:/var/www/sgp_backend/
 
-          # 3. Levantar o reiniciar el proceso de PHP en el puerto 8083
+          # 3. Encender o reiniciar el servidor embebido de PHP en el puerto 8083
           ssh -o StrictHostKeyChecking=no $SSH_USER@$SSH_HOST "bash -s" << 'EOF'
             set -Eeuo pipefail
             
-            # Si el puerto 8083 ya está ocupado por una versión vieja de tu backend, la apaga
+            # Si el puerto 8083 ya está ocupado por una ejecución vieja, la cierra
             fuser -k 8083/tcp || true
             
-            # Enciende el servidor de PHP en segundo plano apuntando a tu puerto asignado
-            nohup php -S localhost:8083 -t /var/www/seminario1/sgp_backend/ > /dev/null 2>&1 &
+            # Levanta el backend apuntando a tu nueva carpeta
+            nohup php -S 0.0.0.0:8083 -t /var/www/sgp_backend/ > /dev/null 2>&1 &
           EOF
