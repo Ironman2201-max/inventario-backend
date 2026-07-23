@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS `invoices` (
+  `id` INT(11) NOT NULL AUTO_INCREMENT,
+  `container_id` INT(11) NOT NULL,
+  `user_id` INT(11) NOT NULL,
+  `reference_code` VARCHAR(50) NOT NULL,
+  `number` VARCHAR(30) NOT NULL,
+  `cufe` VARCHAR(255) NOT NULL,
+  `customer_name` VARCHAR(150) NOT NULL,
+  `customer_nit` VARCHAR(20) NOT NULL,
+  `total` DECIMAL(15,2) NOT NULL,
+  `public_url` VARCHAR(500) DEFAULT NULL,
+  `status` VARCHAR(30) NOT NULL DEFAULT 'Borrador',
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `reference_code` (`reference_code`),
+  UNIQUE KEY `number` (`number`),
+  UNIQUE KEY `cufe` (`cufe`),
+  CONSTRAINT `fk_invoices_containers` FOREIGN KEY (`container_id`) REFERENCES `containers` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `fk_invoices_users` FOREIGN KEY (`user_id`) REFERENCES `usuarios` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;

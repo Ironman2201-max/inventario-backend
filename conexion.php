@@ -11,9 +11,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
 
 // Datos de MySQL en el VPS
 $host = "localhost";
-$db_name = "semi1_sgp_prod";
-$username = "semi1_sgp";
-$password = '$3m1nar10Sgp'; 
+$db_name = "angular_auth_db";
+$username = "root";
+$password = ''; 
 
 try {
     $pdo = new PDO("mysql:host=" . $host . ";dbname=" . $db_name . ";charset=utf8mb4", $username, $password);
