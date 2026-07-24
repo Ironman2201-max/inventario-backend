@@ -1,4 +1,5 @@
 <?php
+// ✅ Cabeceras CORS
 header("Access-Control-Allow-Origin: *");
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
@@ -13,6 +14,7 @@ require_once 'conexion.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
+// 📥 1. REGISTRO DE INGRESO (POST)
 if ($method === 'POST') {
     $data = json_decode(file_get_contents("php://input"));
 
@@ -30,17 +32,15 @@ if ($method === 'POST') {
 
             $code = strtoupper(trim($data->code)); 
             
-            // Validación de ENUM de tipo
             $tiposPermitidos = ['Dry Van', 'Reefer', 'High Cube', 'Vacío', 'Tránsito'];
             $type = in_array($data->type, $tiposPermitidos) ? $data->type : 'Dry Van';
 
-            // Validación de ENUM de estado
             $estadosPermitidos = ['Operativo', 'Mantenimiento', 'Dañado'];
             $status = in_array($data->status, $estadosPermitidos) ? $data->status : 'Operativo';
 
-            $customs_status = $data->customs_status ? 1 : 0; 
-            $warehouse = $data->warehouse;
-            $slot = $data->slot;
+            $customs_status = !empty($data->customs_status) ? 1 : 0; 
+            $warehouse = trim($data->warehouse);
+            $slot = trim($data->slot);
 
             $stmt->bindParam(':code', $code);
             $stmt->bindParam(':type', $type);
@@ -72,21 +72,49 @@ if ($method === 'POST') {
         http_response_code(400);
         echo json_encode(["message" => "Datos de ingreso incompletos."]);
     }
+
+    $pdo = null;
+    exit();
 }
 
+// 📤 2. CONSULTA DE INVENTARIO (GET)
 if ($method === 'GET') {
     try {
-        // 🔍 FILTRADO CLAVE: Solo contenedores que no han salido (exit_date es NULL)
-        $query = "SELECT * FROM containers WHERE exit_date IS NULL ORDER BY id DESC";
+        // Traemos todos los contenedores con sus datos y trazabilidad
+        $query = "SELECT 
+                    c.id, 
+                    c.code, 
+                    c.type, 
+                    c.status, 
+                    c.customs_status, 
+                    c.warehouse, 
+                    c.slot, 
+                    c.entry_date, 
+                    c.exit_date,
+                    u.nombre AS operador_nombre,
+                    u.cedula AS operador_cedula
+                  FROM containers c
+                  LEFT JOIN movements m ON c.id = m.container_id AND m.movement_type = 'ENTRY'
+                  LEFT JOIN usuarios u ON m.user_id = u.id
+                  ORDER BY c.id DESC";
+
         $stmt = $pdo->prepare($query);
         $stmt->execute();
         
         $contenedores = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($contenedores as &$row) {
+            $row['customs_status'] = (bool)$row['customs_status'];
+        }
+
         http_response_code(200);
         echo json_encode($contenedores);
     } catch (PDOException $e) {
         http_response_code(500);
         echo json_encode(["message" => "Error al consultar inventario: " . $e->getMessage()]);
     }
+
+    $pdo = null;
+    exit();
 }
 ?>

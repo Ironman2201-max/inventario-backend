@@ -1,5 +1,5 @@
 <?php
-// Cambiar el asterisco por tu dominio real si quieres restringir el acceso solo a tu frontend:
+// ✅ CORS — Configuración de cabeceras para Angular
 header("Access-Control-Allow-Origin: *");
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
@@ -14,7 +14,9 @@ require_once 'conexion.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
-// 📥 EMITIR Y VALIDAR FACTURA ELECTRÓNICA ANTE LA DIAN (POST)
+// ------------------------------------------------------------------
+// 📥 1. EMITIR Y VALIDAR FACTURA ELECTRÓNICA ANTE LA DIAN (POST)
+// ------------------------------------------------------------------
 if ($method === 'POST') {
     $data = json_decode(file_get_contents("php://input"));
 
@@ -26,72 +28,83 @@ if ($method === 'POST') {
         isset($data->subtotal)
     ) {
 
-        $user_id = intval($data->user_id);
+        $user_id      = intval($data->user_id);
         $container_id = intval($data->container_id);
 
-        // ✅ 0. VALIDAR QUE EL USUARIO EXISTA ANTES DE TOCAR FACTUS/DIAN
-        // Esto evita autorizar una factura fiscal (acción irreversible) que
-        // luego no se pueda registrar localmente por una FK inválida.
+        // ✅ 0. VALIDAR QUE EL USUARIO EXISTA EN LA BD LOCAL
         try {
             $stmt_user = $pdo->prepare("SELECT id FROM usuarios WHERE id = :id");
             $stmt_user->execute([':id' => $user_id]);
             if (!$stmt_user->fetch()) {
                 http_response_code(422);
-                echo json_encode(["message" => "El usuario indicado no existe. No se puede emitir la factura."]);
+                echo json_encode(["message" => "El usuario indicado (ID: $user_id) no existe en el sistema local."]);
+                $pdo = null;
                 exit();
             }
         } catch (PDOException $e) {
             http_response_code(500);
-            echo json_encode(["message" => "Error validando el usuario: " . $e->getMessage()]);
+            echo json_encode(["message" => "Error al validar el usuario local: " . $e->getMessage()]);
+            $pdo = null;
             exit();
         }
 
-        // ✅ 0.1 VALIDAR QUE EL CONTENEDOR EXISTA (misma lógica que la FK fk_invoices_containers)
+        // En facturacion.php reemplazar el bloque de validación del contenedor por este:
+
+        // ✅ 0.1 VALIDAR QUE EL CONTENEDOR EXISTA Y TENGA SALIDA REGISTRADA
         try {
-            $stmt_container = $pdo->prepare("SELECT id FROM containers WHERE id = :id");
+            $stmt_container = $pdo->prepare("SELECT id, exit_date FROM containers WHERE id = :id");
             $stmt_container->execute([':id' => $container_id]);
-            if (!$stmt_container->fetch()) {
+            $contenedor = $stmt_container->fetch();
+
+            if (!$contenedor) {
                 http_response_code(422);
-                echo json_encode(["message" => "El contenedor indicado no existe. No se puede emitir la factura."]);
+                echo json_encode(["message" => "El contenedor indicado (ID: $container_id) no existe en el sistema."]);
+                $pdo = null;
+                exit();
+            }
+
+            if (is_null($contenedor['exit_date'])) {
+                http_response_code(422);
+                echo json_encode([
+                    "message" => "INCOMPATIBLE: El contenedor aún está activo en patio. Debe registrar su SALIDA en el módulo de despacho antes de emitir la factura fiscal."
+                ]);
+                $pdo = null;
                 exit();
             }
         } catch (PDOException $e) {
             http_response_code(500);
-            echo json_encode(["message" => "Error validando el contenedor: " . $e->getMessage()]);
+            echo json_encode(["message" => "Error al validar el estado del contenedor: " . $e->getMessage()]);
+            $pdo = null;
             exit();
         }
 
+        // Configuración de montos y tipos de personería
         $subtotal = floatval($data->subtotal);
-        $tax = $subtotal * 0.19; // IVA del 19%
-        $total = $subtotal + $tax;
-        $legalOrg = !empty($data->legal_organization_id) ? $data->legal_organization_id : 2; // 2 = Persona Natural
+        $tax      = $subtotal * 0.19; // IVA 19%
+        $total    = $subtotal + $tax;
+        $legalOrg = !empty($data->legal_organization_id) ? intval($data->legal_organization_id) : 2; // 2 = Persona Natural
 
-        // ✅ 0.2 VALIDACIÓN BÁSICA DE FORMATO DE CÉDULA/NIT
-        // Factus/DIAN rechaza identificaciones con espacios, guiones, letras o
-        // longitudes fuera de rango. Validamos esto ANTES de llamar a Factus
-        // para dar un mensaje claro y no gastar un intento contra el sandbox.
+        // ✅ 0.2 LIMPIEZA Y VALIDACIÓN DEL FORMATO DEL NIT / CÉDULA
         $nit_limpio = preg_replace('/[^0-9]/', '', $data->customer_nit);
         if (strlen($nit_limpio) < 5 || strlen($nit_limpio) > 15) {
             http_response_code(422);
             echo json_encode([
-                "message" => "El NIT/Cédula del cliente no tiene un formato válido. Debe contener solo números (5 a 15 dígitos), sin puntos, guiones ni espacios."
+                "message" => "El NIT/Cédula del cliente debe tener entre 5 y 15 dígitos numéricos (sin puntos, guiones o espacios)."
             ]);
+            $pdo = null;
             exit();
         }
-        // Sobrescribimos con la versión limpia para que se envíe consistente a Factus
         $data->customer_nit = $nit_limpio;
 
-        // 🔑 1. SOLICITAR ACCESO OAUTH2 A FACTUS (Igual a getAccessToken en Laravel)
-        // NOTA DE SEGURIDAD: mueve estas credenciales a variables de entorno
-        // (por ejemplo con getenv() o una librería como vlucas/phpdotenv),
-        // nunca deben quedar hardcodeadas ni versionadas en el repositorio.
+        // 🔑 1. SOLICITAR ACCESO OAUTH2 A FACTUS
         $ch_auth = curl_init();
         curl_setopt_array($ch_auth, [
-            CURLOPT_URL => "https://api-sandbox.factus.com.co/oauth/token",
+            CURLOPT_URL            => "https://api-sandbox.factus.com.co/oauth/token",
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_SSL_VERIFYPEER => false, // Evita fallos de SSL en local
-            CURLOPT_POSTFIELDS => http_build_query([
+            CURLOPT_POST           => true,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_POSTFIELDS     => http_build_query([
                 'grant_type'    => 'password',
                 'client_id'     => getenv('FACTUS_CLIENT_ID') ?: 'a11c5cb8-203f-4b24-acf1-93df70027320',
                 'client_secret' => getenv('FACTUS_CLIENT_SECRET') ?: 'QYSJ4VoBxi7ubxzaCSOMIBOFyxrQHIezNEwCJLCw',
@@ -100,35 +113,52 @@ if ($method === 'POST') {
             ])
         ]);
 
-        $auth_res = json_decode(curl_exec($ch_auth));
+        $raw_auth_res = curl_exec($ch_auth);
+        $curl_auth_err = curl_error($ch_auth);
+        $auth_http_code = curl_getinfo($ch_auth, CURLINFO_HTTP_CODE);
         curl_close($ch_auth);
 
-        if (!isset($auth_res->access_token)) {
+        if ($curl_auth_err) {
             http_response_code(500);
-            echo json_encode(["message" => "Error de autenticación con las credenciales de Factus."]);
+            echo json_encode([
+                "message" => "Error de conexión cURL al intentar autenticar con Factus: " . $curl_auth_err
+            ]);
+            $pdo = null;
+            exit();
+        }
+
+        $auth_res = json_decode($raw_auth_res);
+
+        if ($auth_http_code !== 200 || !isset($auth_res->access_token)) {
+            http_response_code(500);
+            echo json_encode([
+                "message"          => "Fallo de autenticación con el servidor de Factus (HTTP $auth_http_code).",
+                "respuesta_factus" => $auth_res ?? $raw_auth_res
+            ]);
+            $pdo = null;
             exit();
         }
 
         $token = $auth_res->access_token;
         $reference_code = "FAC-" . time() . "-" . uniqid();
 
-        // 📝 2. PREPARAR EL JSON CON LA ESTRUCTURA QUE ADMITE FACTUS Y LA DIAN
+        // 📝 2. PREPARAR EL ESTRUCTURA JSON QUE ADMITE FACTUS Y LA DIAN
         $factura_dian = [
-            "document"           => "01",
-            "numbering_range_id" => 8, // Rango por defecto de Sandbox
-            "reference_code"     => $reference_code,
-            "observation"        => "Factura por Servicio de Patio / Contenedor ID: " . $data->container_id,
-            "payment_method_code"=> "10", // Efectivo
+            "document"            => "01",
+            "numbering_range_id"  => 8,
+            "reference_code"      => $reference_code,
+            "observation"         => "Factura por Servicio de Patio / Contenedor ID: " . $container_id,
+            "payment_method_code" => "10",
             "customer" => [
                 "identification"             => $data->customer_nit,
-                "names"                      => $data->customer_name,
-                "address"                    => !empty($data->address) ? $data->address : "Zona Portuaria, Buenaventura",
-                "email"                      => !empty($data->email) ? $data->email : "correo@cliente.com",
-                "phone"                      => !empty($data->phone) ? $data->phone : "3000000000",
+                "names"                      => trim($data->customer_name),
+                "address"                    => !empty($data->address) ? trim($data->address) : "Zona Portuaria, Buenaventura",
+                "email"                      => !empty($data->email) ? trim($data->email) : "correo@cliente.com",
+                "phone"                      => !empty($data->phone) ? trim($data->phone) : "3000000000",
                 "legal_organization_id"      => $legalOrg,
-                "tribute_id"                 => "21", // IVA
-                "identification_document_id" => !empty($data->identification_document_id) ? $data->identification_document_id : 3,
-                "municipality_id"            => !empty($data->municipality_id) ? $data->municipality_id : 148 // Buenaventura ID
+                "tribute_id"                 => "21",
+                "identification_document_id" => !empty($data->identification_document_id) ? intval($data->identification_document_id) : ($legalOrg === 1 ? 3 : 1),
+                "municipality_id"            => !empty($data->municipality_id) ? intval($data->municipality_id) : 148
             ],
             "items" => [
                 [
@@ -138,7 +168,7 @@ if ($method === 'POST') {
                     "discount_rate"    => "0.00",
                     "price"            => $subtotal,
                     "tax_rate"         => "19.00",
-                    "unit_measure_id"  => 70, // Unidad
+                    "unit_measure_id"  => 70,
                     "standard_code_id" => 1,
                     "is_excluded"      => 0,
                     "tribute_id"       => 1
@@ -146,30 +176,44 @@ if ($method === 'POST') {
             ]
         ];
 
-        // Añadir Dígito de Verificación si es Persona Jurídica (1)
-        if ($legalOrg == 1 && !empty($data->dv)) {
-            $factura_dian['customer']['dv'] = $data->dv;
+        // Se agrega el Dígito de Verificación solo si es Persona Jurídica
+        if ($legalOrg === 1 && !empty($data->dv)) {
+            $factura_dian['customer']['dv'] = trim($data->dv);
         }
 
-        // 🚀 3. ENVIAR FACTURA ELECTRÓNICA AL ENDPOINT /v1/bills/validate
+        // 🚀 3. TRANSMITIR EL JSON A FACTUS EN EL ENDPOINT /v1/bills/validate
         $ch_invoice = curl_init();
         curl_setopt_array($ch_invoice, [
-            CURLOPT_URL => "https://api-sandbox.factus.com.co/v1/bills/validate",
+            CURLOPT_URL            => "https://api-sandbox.factus.com.co/v1/bills/validate",
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
+            CURLOPT_POST           => true,
             CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_POSTFIELDS => json_encode($factura_dian),
-            CURLOPT_HTTPHEADER => [
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_POSTFIELDS     => json_encode($factura_dian),
+            CURLOPT_HTTPHEADER     => [
                 "Authorization: Bearer " . $token,
                 "Content-Type: application/json",
                 "Accept: application/json"
             ]
         ]);
 
-        $invoice_res = json_decode(curl_exec($ch_invoice), true);
+        $raw_invoice_res = curl_exec($ch_invoice);
+        $curl_inv_err = curl_error($ch_invoice);
+        $inv_http_code = curl_getinfo($ch_invoice, CURLINFO_HTTP_CODE);
         curl_close($ch_invoice);
 
-        // 💾 4. VALIDAR RESPUESTA EXITOSA DE LA DIAN Y GUARDAR LOCALMENTE
+        if ($curl_inv_err) {
+            http_response_code(500);
+            echo json_encode([
+                "message" => "Error cURL al transmitir la factura a Factus: " . $curl_inv_err
+            ]);
+            $pdo = null;
+            exit();
+        }
+
+        $invoice_res = json_decode($raw_invoice_res, true);
+
+        // 💾 4. GUARDAR FACTURA EN BASE DE DATOS SI FACTUS RESPONDIÓ EXITOSAMENTE
         if (isset($invoice_res['data']['bill'])) {
             $bill = $invoice_res['data']['bill'];
 
@@ -191,67 +235,60 @@ if ($method === 'POST') {
 
                 http_response_code(201);
                 echo json_encode([
-                    "status" => "OK",
-                    "message" => "¡Factura electrónica validada con éxito por la DIAN!",
-                    "number" => $bill['number'],
-                    "cufe" => $bill['cufe'] ?? 'N/A',
+                    "status"     => "OK",
+                    "message"    => "¡Factura electrónica validada con éxito por la DIAN!",
+                    "number"     => $bill['number'],
+                    "cufe"       => $bill['cufe'] ?? 'N/A',
                     "public_url" => $bill['public_url'] ?? ''
                 ]);
 
             } catch (PDOException $e) {
-                // Esto ya no debería ocurrir por user_id/container_id inválidos,
-                // ya que se validaron antes de llamar a Factus. Si aun así falla
-                // (ej. reference_code/number/cufe duplicados), se registra para
-                // no perder los datos de una factura ya autorizada ante la DIAN.
-                error_log(
-                    "ALERTA: Factura autorizada en Factus pero SIN registrar localmente. " .
-                    "reference_code={$bill['reference_code']} number={$bill['number']} " .
-                    "cufe=" . ($bill['cufe'] ?? 'N/A') . " error=" . $e->getMessage()
-                );
-
                 http_response_code(500);
                 echo json_encode([
-                    "message" => "Factura autorizada en Factus pero falló el registro local en MySQL.",
+                    "message"        => "La factura fue aprobada por la DIAN pero falló al guardarse localmente en MySQL.",
                     "reference_code" => $bill['reference_code'],
-                    "number" => $bill['number'],
-                    "cufe" => $bill['cufe'] ?? 'N/A',
-                    "detalle_tecnico" => $e->getMessage()
+                    "number"         => $bill['number'],
+                    "cufe"           => $bill['cufe'] ?? 'N/A',
+                    "error_local"    => $e->getMessage()
                 ]);
             }
         } else {
-            // 📋 Log completo del rechazo para revisar mañana sin depender
-            // de la consola del navegador. Queda en el error log de PHP
-            // (revísalo con: tail -f /ruta/a/php_error.log, o en XAMPP
-            // normalmente en xampp/php/logs/php_error_log).
-            error_log(
-                "RECHAZO FACTUS/DIAN — reference_code={$reference_code} | " .
-                "customer_nit={$data->customer_nit} | " .
-                "respuesta_completa=" . json_encode($invoice_res)
-            );
-
+            // 🛑 Respuesta de Rechazo de Factus/DIAN
             http_response_code(400);
             echo json_encode([
-                "message" => "Factus o la DIAN rechazaron los datos.",
-                "detalles" => $invoice_res
+                "message"         => "Factus o la DIAN rechazaron la factura electrónica (HTTP $inv_http_code).",
+                "detalles_factus" => $invoice_res ?? $raw_invoice_res
             ]);
         }
     } else {
         http_response_code(400);
-        echo json_encode(["message" => "Datos incompletos para realizar la liquidación fiscal."]);
+        echo json_encode(["message" => "Datos incompletos para realizar la facturación."]);
     }
+
+    $pdo = null;
+    exit();
 }
 
-// 📤 OBTENER HISTORIAL DE FACTURAS DIAN EMITIDAS (GET)
+// ------------------------------------------------------------------
+// 📤 2. OBTENER HISTORIAL DE FACTURAS DIAN EMITIDAS (GET)
+// ------------------------------------------------------------------
 if ($method === 'GET') {
     try {
-        $query = "SELECT i.*, c.code AS container_code FROM invoices i
+        $query = "SELECT i.*, c.code AS container_code, u.nombre AS operador_nombre
+                  FROM invoices i
                   INNER JOIN containers c ON i.container_id = c.id
+                  LEFT JOIN usuarios u ON i.user_id = u.id
                   ORDER BY i.id DESC";
         $stmt = $pdo->prepare($query);
         $stmt->execute();
+        
         echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
     } catch (PDOException $e) {
         http_response_code(500);
-        echo json_encode(["message" => "Error al traer facturas: " . $e->getMessage()]);
+        echo json_encode(["message" => "Error al obtener el historial de facturas: " . $e->getMessage()]);
     }
+
+    $pdo = null;
+    exit();
 }
+?>
